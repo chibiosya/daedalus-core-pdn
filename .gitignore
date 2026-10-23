@@ -1,0 +1,10 @@
+# client brief, not part of the public asset
+_inbox/
+# KiCad GUI side files
+*-backups/
+fp-info-cache
+*.kicad_prl
+*.lck
+_autosave-*
+# OS
+.DS_Store

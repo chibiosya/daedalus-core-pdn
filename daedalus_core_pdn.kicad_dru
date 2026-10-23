@@ -1,0 +1,56 @@
+(version 1)
+
+# Daedalus core PDN - design rules.  Numeric limits live in daedalus_core_pdn.kicad_pro
+# (Board Setup > Constraints / Net Classes).  This file carries the rules that need
+# conditions.  Supplied items (U1, U2, H1..H4, groups U1_FANOUT and U2_VIAS) are exempt
+# from the keepouts; anything else placed in a rule area is a DRC error.
+
+# No via-in-pad for any SMD pad.  U2's output pads are supplied with vias inside them
+# and are exempt.
+(rule no_via_in_pad
+	(condition "A.Type == 'Via' && B.Type == 'Pad' && B.Pad_Type == 'SMD' && !B.memberOfFootprint('U2')")
+	(constraint physical_clearance (min 0.1mm)))
+
+# KO_BGA_TOP: F.Cu only, 14 x 14 mm around U1.  U1 and its supplied dog-bone fanout are exempt.
+(rule ko_bga_top
+	(layer "F.Cu")
+	(condition "A.intersectsArea('KO_BGA_TOP') && !A.memberOfFootprint('U1') && !(A.Type == 'Footprint' && A.Reference == 'U1') && !A.memberOfGroup('U1_FANOUT')")
+	(constraint disallow footprint via track))
+
+# KO_DDR_CHANNEL: F.Cu and B.Cu, x 108..130, y 64..96.
+(rule ko_ddr_channel
+	(layer outer)
+	(condition "A.intersectsArea('KO_DDR_CHANNEL')")
+	(constraint disallow footprint via track))
+
+# KO_CONNECTOR: F.Cu and B.Cu, x 70..90, y 60..70.  Mounting hole H1 sits in it and is exempt.
+(rule ko_connector
+	(layer outer)
+	(condition "A.intersectsArea('KO_CONNECTOR') && !A.memberOfFootprint('H1') && !(A.Type == 'Footprint' && A.Reference == 'H1')")
+	(constraint disallow footprint via track))
+
+# KO_VRM: F.Cu and B.Cu, x 70..81, y 74..86.  U2 and its supplied vias are exempt.
+(rule ko_vrm
+	(layer outer)
+	(condition "A.intersectsArea('KO_VRM') && !A.memberOfFootprint('U2') && !(A.Type == 'Footprint' && A.Reference == 'U2') && !A.memberOfGroup('U2_VIAS')")
+	(constraint disallow footprint via track))
+
+# KO_MH1..4: all copper layers, radius 3.5 mm around each mounting hole.  The hole footprint itself is exempt.
+(rule ko_mh1
+	(condition "A.intersectsArea('KO_MH1') && !A.memberOfFootprint('H1') && !(A.Type == 'Footprint' && A.Reference == 'H1')")
+	(constraint disallow footprint via track))
+(rule ko_mh2
+	(condition "A.intersectsArea('KO_MH2') && !A.memberOfFootprint('H2') && !(A.Type == 'Footprint' && A.Reference == 'H2')")
+	(constraint disallow footprint via track))
+(rule ko_mh3
+	(condition "A.intersectsArea('KO_MH3') && !A.memberOfFootprint('H3') && !(A.Type == 'Footprint' && A.Reference == 'H3')")
+	(constraint disallow footprint via track))
+(rule ko_mh4
+	(condition "A.intersectsArea('KO_MH4') && !A.memberOfFootprint('H4') && !(A.Type == 'Footprint' && A.Reference == 'H4')")
+	(constraint disallow footprint via track))
+
+# Copper keepout radius 3.5 mm around the 3.2 mm NPTH mounting holes, enforced for zone
+# fills and for any copper added later: hole edge (r 1.6) + 1.9 mm = 3.5 mm.
+(rule mounting_hole_copper_keepout
+	(condition "B.Pad_Type == 'NPTH, mechanical'")
+	(constraint hole_clearance (min 1.9mm)))
