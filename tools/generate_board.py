@@ -4,11 +4,14 @@ from the numbers in BOARD_ASSET_SPEC.md.  Stdlib only; writes KiCad 8 S-expressi
 directly.  Zones are written UNFILLED; tools/finalize_board.py (KiCad's bundled
 python + pcbnew) fills them and re-saves.
 
-    python3 tools/generate_board.py [--out DIR] [--negative-test]
+    python3 tools/generate_board.py [--out DIR] [--negative-test | --positive-test]
 
 --negative-test adds deliberately illegal items (a capacitor inside KO_BGA_TOP, a
-via inside KO_VRM, a track inside KO_DDR_CHANNEL, a via inside KO_MH1) so the
-.kicad_dru keepout rules can be proven to fire.  Never ship that variant.
+via inside KO_VRM, a track inside KO_DDR_CHANNEL, a via inside KO_MH1, a via
+centred between two U1 balls) so the .kicad_dru keepout rules can be proven to
+fire.  --positive-test adds one legal item (a via at an outer-ring interstitial
+position of the U1 ball grid, inside KO_BGA_TOP) that must pass DRC.  Never ship
+either variant.
 """
 import argparse
 import json
@@ -41,6 +44,9 @@ U1_TRACK_W = 0.15
 U1_VIA_OFF = (0.4, 0.4)
 U1_VIA_D, U1_VIA_DRILL = 0.45, 0.2
 U1_CRTYD = 13.0
+U1_BALL_A1 = (U1_CENTER[0] - U1_PITCH * (U1_N - 1) / 2, U1_CENTER[1] - U1_PITCH * (U1_N - 1) / 2)  # (94.4, 74.4)
+POS_VIA_INTERSTITIAL = (U1_BALL_A1[0] + U1_VIA_OFF[0], U1_BALL_A1[1] + U1_VIA_OFF[1])              # (94.8, 74.8), test only
+NEG_VIA_BETWEEN_BALLS = (U1_BALL_A1[0] + U1_PITCH / 2, U1_BALL_A1[1])                             # (94.8, 74.4), test only
 
 U2_CENTER = (75.0, 80.0)
 U2_PAD = (4.0, 3.0)
@@ -257,7 +263,7 @@ HEADER = '''(kicad_pcb
 	(net 2 "VDD_CORE")
 ''' % f(THICKNESS)
 
-def build(negative_test=False):
+def build(negative_test=False, positive_test=False):
     supplied = {"footprints": [], "tracks": [], "vias": [], "zones": [], "rule_areas": [], "edge_cuts": [], "groups": []}
     out = [HEADER]
 
@@ -315,6 +321,14 @@ def build(negative_test=False):
         out.append(via("neg/via_in_KO_MH1", (75.5, 63.0), U1_VIA_D, U1_VIA_DRILL, "GND", {"vias": []})[0])
         # 5) via inside an SMD pad that is not U2's (CTEST1 pad 2) -> no_via_in_pad
         out.append(via("neg/via_in_pad", (cx + 0.48, cy), U1_VIA_D, U1_VIA_DRILL, "GND", {"vias": []})[0])
+        # 6) via centred between balls A1 and A2 (inside KO_BGA_TOP): legal for ko_bga_top,
+        #    but the 0.4 mm ball pads overlap the 0.45 mm via -> clearance / no_via_in_pad
+        out.append(via("neg/via_between_balls", NEG_VIA_BETWEEN_BALLS, U1_VIA_D, U1_VIA_DRILL, "GND", {"vias": []})[0])
+    if positive_test:
+        # one via at the interstitial position of outer-ring ball A1 (ball centre + (0.4, 0.4)),
+        # inside KO_BGA_TOP but outside the core 7x7 field.  Vias are allowed under the BGA;
+        # this one clears the four surrounding balls by 0.141 mm like the supplied dog-bones.
+        out.append(via("pos/via_interstitial_A1", POS_VIA_INTERSTITIAL, U1_VIA_D, U1_VIA_DRILL, "GND", {"vias": []})[0])
 
     out.append(")\n")
     return "\n".join(out), supplied, ball_map
@@ -416,7 +430,8 @@ DRU = '''(version 1)
 # Daedalus core PDN - design rules.  Numeric limits live in daedalus_core_pdn.kicad_pro
 # (Board Setup > Constraints / Net Classes).  This file carries the rules that need
 # conditions.  Supplied items (U1, U2, H1..H4, groups U1_FANOUT and U2_VIAS) are exempt
-# from the keepouts; anything else placed in a rule area is a DRC error.
+# from the keepouts; anything else placed in a rule area is a DRC error, except that
+# KO_BGA_TOP allows vias (see below).
 
 # No via-in-pad for any SMD pad.  U2's output pads are supplied with vias inside them
 # and are exempt.
@@ -424,11 +439,15 @@ DRU = '''(version 1)
 	(condition "A.Type == 'Via' && B.Type == 'Pad' && B.Pad_Type == 'SMD' && !B.memberOfFootprint('U2')")
 	(constraint physical_clearance (min 0.1mm)))
 
-# KO_BGA_TOP: F.Cu only, 14 x 14 mm around U1.  U1 and its supplied dog-bone fanout are exempt.
+# KO_BGA_TOP: F.Cu only, 14 x 14 mm around U1.  Keeps components and tracks off the top
+# side under the BGA.  Vias are NOT disallowed here: they may sit at the interstitial
+# positions of the ball grid (as the supplied dog-bones do) and are governed only by the
+# normal clearance, hole-to-copper and no_via_in_pad rules against the ball pads.
+# U1 and its supplied dog-bone fanout are exempt.
 (rule ko_bga_top
 	(layer "F.Cu")
 	(condition "A.intersectsArea('KO_BGA_TOP') && !A.memberOfFootprint('U1') && !(A.Type == 'Footprint' && A.Reference == 'U1') && !A.memberOfGroup('U1_FANOUT')")
-	(constraint disallow footprint via track))
+	(constraint disallow footprint track))
 
 # KO_DDR_CHANNEL: F.Cu and B.Cu, x 108..130, y 64..96.
 (rule ko_ddr_channel
@@ -465,10 +484,12 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--out", default=os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
     ap.add_argument("--negative-test", action="store_true")
+    ap.add_argument("--positive-test", action="store_true")
     a = ap.parse_args()
+    test = a.negative_test or a.positive_test
     out = os.path.abspath(a.out)
     os.makedirs(out, exist_ok=True)
-    text, supplied, ball_map = build(a.negative_test)
+    text, supplied, ball_map = build(a.negative_test, a.positive_test)
     with open(os.path.join(out, NAME + ".kicad_pcb"), "w") as fh:
         fh.write(text)
     with open(os.path.join(out, NAME + ".kicad_pro"), "w") as fh:
@@ -476,7 +497,7 @@ def main():
         fh.write("\n")
     with open(os.path.join(out, NAME + ".kicad_dru"), "w") as fh:
         fh.write(DRU)
-    if not a.negative_test:
+    if not test:
         supplied["u1_ball_map"] = ball_map
         with open(os.path.join(out, "supplied_items.json"), "w") as fh:
             json.dump(supplied, fh, indent=2)
@@ -484,7 +505,7 @@ def main():
     n_v = sum(1 for b in ball_map.values() if b == "VDD_CORE")
     n_g = sum(1 for b in ball_map.values() if b == "GND")
     print("wrote %s/%s.kicad_pcb (+pro, dru%s); U1 balls VDD_CORE=%d GND=%d; vias=%d tracks=%d rule_areas=%d" % (
-        out, NAME, "" if a.negative_test else ", supplied_items.json", n_v, n_g,
+        out, NAME, "" if test else ", supplied_items.json", n_v, n_g,
         len(supplied["vias"]), len(supplied["tracks"]), len(supplied["rule_areas"])))
 
 if __name__ == "__main__":

@@ -30,7 +30,12 @@ The keepout rules were proven to fire with a negative-test board (`tools/generat
 --negative-test`): a C_0402 capacitor placed inside KO_BGA_TOP, a via inside KO_VRM, a track inside
 KO_DDR_CHANNEL on B.Cu, a via inside KO_MH1 and a via inside a non-U2 SMD pad are each reported as
 an error by the corresponding rule (`ko_bga_top`, `ko_vrm`, `ko_ddr_channel`, `ko_mh1` +
-`mounting_hole_copper_keepout`, `no_via_in_pad`). `tools/build.sh` re-runs that test every build.
+`mounting_hole_copper_keepout`, `no_via_in_pad`), and a via centred between two adjacent U1 balls
+(A1/A2, at 94.8, 74.4) fails on `clearance` to the ball pads while `ko_bga_top` fires only on the
+capacitor, not on any via. A positive-test board (`--positive-test`) with one via at an outer-ring
+interstitial position of the ball grid (A1 + (0.4, 0.4) = 94.8, 74.8, inside KO_BGA_TOP but
+outside the core 7x7 field) passes DRC with 0 violations. `tools/build.sh` re-runs both tests
+every build.
 
 ## Board
 
@@ -121,18 +126,23 @@ Ball map (V = VDD_CORE, G = GND, . = no net):
 
 The keepouts are **named rule areas with no keepout flags of their own**; the enforcement lives in
 `daedalus_core_pdn.kicad_dru` so that supplied items can be exempted while anything added later
-is checked. Inside each area footprints, vias and tracks are forbidden on the listed layers.
+is checked. Inside each area footprints, vias and tracks are forbidden on the listed layers, with
+one exception: KO_BGA_TOP forbids footprints and tracks only. **Vias are allowed under the BGA**,
+subject to the normal rules against the ball pads (0.100 mm clearance, 0.250 mm hole-to-copper
+clearance, `no_via_in_pad`). In practice that means the interstitial positions of the ball grid
+(ball centre + (±0.4, ±0.4) mm), where the supplied dog-bone vias already sit with 0.141 mm
+clearance; a via centred between two adjacent balls overlaps their pads and fails.
 
-| Name | Layers | Shape | Coordinates (mm) | Exempt supplied items |
-|---|---|---|---|---|
-| KO_BGA_TOP | F.Cu | 14 x 14 mm square | x 93..107, y 73..87 (centre 100,80) | U1, group U1_FANOUT |
-| KO_DDR_CHANNEL | F.Cu, B.Cu | rectangle | x 108..130, y 64..96 | none |
-| KO_CONNECTOR | F.Cu, B.Cu | rectangle | x 70..90, y 60..70 | H1 |
-| KO_VRM | F.Cu, B.Cu | rectangle | x 70..81, y 74..86 | U2, group U2_VIAS |
-| KO_MH1 | all copper | circle r 3.5 mm (72-gon) | centre (73,63) | H1 |
-| KO_MH2 | all copper | circle r 3.5 mm (72-gon) | centre (127,63) | H2 |
-| KO_MH3 | all copper | circle r 3.5 mm (72-gon) | centre (73,97) | H3 |
-| KO_MH4 | all copper | circle r 3.5 mm (72-gon) | centre (127,97) | H4 |
+| Name | Layers | Forbids | Shape | Coordinates (mm) | Exempt supplied items |
+|---|---|---|---|---|---|
+| KO_BGA_TOP | F.Cu | footprints, tracks (vias allowed) | 14 x 14 mm square | x 93..107, y 73..87 (centre 100,80) | U1, group U1_FANOUT |
+| KO_DDR_CHANNEL | F.Cu, B.Cu | footprints, vias, tracks | rectangle | x 108..130, y 64..96 | none |
+| KO_CONNECTOR | F.Cu, B.Cu | footprints, vias, tracks | rectangle | x 70..90, y 60..70 | H1 |
+| KO_VRM | F.Cu, B.Cu | footprints, vias, tracks | rectangle | x 70..81, y 74..86 | U2, group U2_VIAS |
+| KO_MH1 | all copper | footprints, vias, tracks | circle r 3.5 mm (72-gon) | centre (73,63) | H1 |
+| KO_MH2 | all copper | footprints, vias, tracks | circle r 3.5 mm (72-gon) | centre (127,63) | H2 |
+| KO_MH3 | all copper | footprints, vias, tracks | circle r 3.5 mm (72-gon) | centre (73,97) | H3 |
+| KO_MH4 | all copper | footprints, vias, tracks | circle r 3.5 mm (72-gon) | centre (127,97) | H4 |
 
 Rule areas in KiCad are polygons, so each circle is a 72-sided polygon with its vertices on the
 3.5 mm radius. A footprint counts as inside an area when its courtyard intersects the area
@@ -173,11 +183,13 @@ with vias inside them and are the only exemption.
 (rule ko_bga_top
 	(layer "F.Cu")
 	(condition "A.intersectsArea('KO_BGA_TOP') && !A.memberOfFootprint('U1') && !(A.Type == 'Footprint' && A.Reference == 'U1') && !A.memberOfGroup('U1_FANOUT')")
-	(constraint disallow footprint via track))
+	(constraint disallow footprint track))
 ```
 One such rule per keepout (`ko_bga_top`, `ko_ddr_channel`, `ko_connector`, `ko_vrm`, `ko_mh1..4`),
 each restricted to the area's layers (`(layer outer)` for F.Cu + B.Cu, no layer clause for
-all-copper) and exempting only the supplied items listed in the table above.
+all-copper) and exempting only the supplied items listed in the table above. All of them except
+`ko_bga_top` use `(constraint disallow footprint via track)`; `ko_bga_top` omits `via`, so vias
+under the BGA are governed by the clearance, hole-to-copper and `no_via_in_pad` rules only.
 
 ```
 (rule mounting_hole_copper_keepout
@@ -213,7 +225,8 @@ KICAD_APP=/Applications/KiCad/KiCad.app tools/build.sh
 `tools/generate_board.py` (stdlib Python, no KiCad needed) writes the three KiCad files and
 `supplied_items.json` from the numbers above; `tools/finalize_board.py` (KiCad's bundled python,
 `pcbnew`) fills the zones and re-saves in canonical KiCad 8 format; `tools/build.sh` then runs
-DRC at error and warning severity, the negative keepout test, the verifier and the SVG exports.
+DRC at error and warning severity, the negative and positive keepout tests, the verifier and the
+SVG exports.
 Built and validated with KiCad 8.0.9 on macOS.
 
 ## Renders
@@ -234,6 +247,17 @@ Built and validated with KiCad 8.0.9 on macOS.
 * Keepout rules use `intersectsArea` (any overlap is a violation), the same test KiCad uses for its
   own rule-area keepouts.
 * Reference designators of H1..H4 are hidden; U1/U2 references are on F.SilkS outside their pads.
+
+## Changelog
+
+* **v1.1 (2026-10-24)**: `ko_bga_top` no longer disallows vias (`disallow footprint track`
+  instead of `disallow footprint via track`). The keepout was meant to keep components and tracks
+  off the top side under the BGA, not to forbid through vias at the interstitial positions of the
+  ball grid, which the supplied dog-bones already use. Vias under the BGA are governed by the
+  normal clearance, hole-to-copper and `no_via_in_pad` rules. Negative test extended (via between
+  two balls must fail on clearance) and a positive test added (interstitial via must pass). Board,
+  project file and `supplied_items.json` are unchanged.
+* **v1.0 (2026-10-23)**: initial release.
 
 ## Licence
 

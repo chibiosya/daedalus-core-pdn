@@ -3,7 +3,8 @@
 # Daedalus core PDN - design rules.  Numeric limits live in daedalus_core_pdn.kicad_pro
 # (Board Setup > Constraints / Net Classes).  This file carries the rules that need
 # conditions.  Supplied items (U1, U2, H1..H4, groups U1_FANOUT and U2_VIAS) are exempt
-# from the keepouts; anything else placed in a rule area is a DRC error.
+# from the keepouts; anything else placed in a rule area is a DRC error, except that
+# KO_BGA_TOP allows vias (see below).
 
 # No via-in-pad for any SMD pad.  U2's output pads are supplied with vias inside them
 # and are exempt.
@@ -11,11 +12,15 @@
 	(condition "A.Type == 'Via' && B.Type == 'Pad' && B.Pad_Type == 'SMD' && !B.memberOfFootprint('U2')")
 	(constraint physical_clearance (min 0.1mm)))
 
-# KO_BGA_TOP: F.Cu only, 14 x 14 mm around U1.  U1 and its supplied dog-bone fanout are exempt.
+# KO_BGA_TOP: F.Cu only, 14 x 14 mm around U1.  Keeps components and tracks off the top
+# side under the BGA.  Vias are NOT disallowed here: they may sit at the interstitial
+# positions of the ball grid (as the supplied dog-bones do) and are governed only by the
+# normal clearance, hole-to-copper and no_via_in_pad rules against the ball pads.
+# U1 and its supplied dog-bone fanout are exempt.
 (rule ko_bga_top
 	(layer "F.Cu")
 	(condition "A.intersectsArea('KO_BGA_TOP') && !A.memberOfFootprint('U1') && !(A.Type == 'Footprint' && A.Reference == 'U1') && !A.memberOfGroup('U1_FANOUT')")
-	(constraint disallow footprint via track))
+	(constraint disallow footprint track))
 
 # KO_DDR_CHANNEL: F.Cu and B.Cu, x 108..130, y 64..96.
 (rule ko_ddr_channel
